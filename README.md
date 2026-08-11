@@ -1,4 +1,4 @@
-# AI Knowledge Retrieval Platform with Query Resolution System
+# Development of AI Based Knowledge Retrieval Platform with Query Resolution System
 
 An AI-powered knowledge retrieval platform that allows users to upload knowledge-base documents and query them using natural language.
 
