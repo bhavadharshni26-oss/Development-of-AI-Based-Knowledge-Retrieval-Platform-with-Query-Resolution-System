@@ -1,367 +1,184 @@
-import os
-import tkinter as tk
-from tkinter import filedialog
-
-from pypdf import PdfReader
-from docx import Document
-import pandas as pd
+import re
 
 
-BASE_FOLDER = os.path.dirname(os.path.abspath(__file__))
-
-OUTPUT_FOLDER = os.path.join(
-    BASE_FOLDER,
-    "extracted_text"
-)
-
-
-def select_file():
-
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-
-    file_path = filedialog.askopenfilename(
-        title="Select Document",
-        filetypes=[
-            ("Supported Files", "*.pdf *.docx *.txt *.csv"),
-            ("PDF Files", "*.pdf"),
-            ("DOCX Files", "*.docx"),
-            ("TXT Files", "*.txt"),
-            ("CSV Files", "*.csv")
-        ]
-    )
-
-    root.destroy()
-
-    return file_path
-
-
-def extract_pdf(file_path):
-
-    reader = PdfReader(file_path)
-
-    text = ""
-
-    for page_number, page in enumerate(
-        reader.pages,
-        start=1
-    ):
-
-        page_text = page.extract_text()
-
-        if page_text:
-
-            text += f"\n--- Page {page_number} ---\n"
-            text += page_text
-
-    return text
+STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "at",
+    "be",
+    "by",
+    "can",
+    "do",
+    "does",
+    "for",
+    "from",
+    "how",
+    "i",
+    "in",
+    "is",
+    "it",
+    "me",
+    "of",
+    "on",
+    "or",
+    "please",
+    "show",
+    "tell",
+    "the",
+    "to",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "with",
+}
 
 
-def extract_docx(file_path):
+def normalize_query(query: str) -> str:
+    """Normalize query text for extraction."""
 
-    document = Document(file_path)
-
-    text = ""
-
-    for paragraph in document.paragraphs:
-
-        paragraph_text = paragraph.text.strip()
-
-        if paragraph_text:
-
-            text += paragraph_text + "\n"
-
-    return text
-
-
-def extract_txt(file_path):
-
-    encodings = [
-        "utf-8",
-        "utf-8-sig",
-        "cp1252",
-        "latin1"
-    ]
-
-    for encoding in encodings:
-
-        try:
-
-            with open(
-                file_path,
-                "r",
-                encoding=encoding
-            ) as file:
-
-                return file.read()
-
-        except UnicodeDecodeError:
-
-            continue
-
-    raise ValueError(
-        "Unable to read the TXT file."
-    )
-
-
-def extract_csv(file_path):
-
-    encodings = [
-        "utf-8",
-        "utf-8-sig",
-        "cp1252",
-        "latin1"
-    ]
-
-    dataframe = None
-
-    last_error = None
-
-    for encoding in encodings:
-
-        try:
-
-            dataframe = pd.read_csv(
-                file_path,
-                sep=None,
-                engine="python",
-                encoding=encoding,
-                on_bad_lines="skip",
-                comment="#"
-            )
-
-            break
-
-        except Exception as error:
-
-            last_error = error
-
-    if dataframe is None:
-
-        raise ValueError(
-            f"Unable to read CSV file: {last_error}"
-        )
-
-    if dataframe.empty:
-
+    if not query:
         return ""
 
-    text = ""
+    query = query.lower().replace("\\_", "_")
+    query = re.sub(r"\s+", " ", query)
 
-    columns = list(
-        dataframe.columns
+    return query.strip()
+
+
+def extract_exact_terms(query: str) -> list[str]:
+    """
+    Extract identifier-like values from a user query.
+
+    Examples:
+        Name_1
+        Name_7
+        email_25@example.com
+        user-123
+    """
+
+    normalized_query = normalize_query(query)
+
+    if not normalized_query:
+        return []
+
+    terms = []
+
+    # Identifiers such as Name_1.
+    terms.extend(
+        re.findall(
+            r"\b[\w-]*_[\w-]*\d[\w-]*\b",
+            normalized_query,
+        )
     )
 
-    text += "--- CSV Columns ---\n"
-
-    text += ", ".join(
-        str(column)
-        for column in columns
+    # Email addresses.
+    terms.extend(
+        re.findall(
+            r"\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b",
+            normalized_query,
+        )
     )
 
-    text += "\n"
-
-    for index, row in dataframe.iterrows():
-
-        text += (
-            f"\n--- Row {index + 1} ---\n"
+    # Other identifiers containing digits.
+    terms.extend(
+        re.findall(
+            r"\b[a-z][a-z0-9-]*\d[a-z0-9-]*\b",
+            normalized_query,
         )
-
-        for column in columns:
-
-            value = row[column]
-
-            if pd.isna(value):
-
-                value = ""
-
-            text += (
-                f"{column}: "
-                f"{str(value).strip()}\n"
-            )
-
-    return text
-
-
-def clean_text(text):
-
-    cleaned_lines = []
-
-    for line in text.splitlines():
-
-        line = line.strip()
-
-        if line:
-
-            cleaned_lines.append(line)
-
-    return "\n".join(cleaned_lines)
-
-
-def extract_document(file_path):
-
-    if not os.path.isfile(file_path):
-
-        raise FileNotFoundError(
-            "File not found."
-        )
-
-    extension = os.path.splitext(
-        file_path
-    )[1].lower()
-
-    print(
-        "\nFile:",
-        os.path.basename(file_path)
     )
 
-    print(
-        "Type:",
-        extension
+    # Remove duplicates while preserving order.
+    unique_terms = []
+
+    for term in terms:
+        if term not in unique_terms:
+            unique_terms.append(term)
+
+    return unique_terms
+
+
+def extract_entities(
+    query: str,
+    exact_terms: list[str],
+) -> list[str]:
+    """
+    Extract entities from the query.
+
+    Initially, identifier-like exact terms are treated
+    as entities for retrieval purposes.
+    """
+
+    return exact_terms.copy()
+
+
+def extract_keywords(
+    query: str,
+    exact_terms: list[str],
+) -> list[str]:
+    """
+    Extract important keyword terms from the query.
+    """
+
+    normalized_query = normalize_query(query)
+
+    if not normalized_query:
+        return []
+
+    words = re.findall(
+        r"\b[a-zA-Z][a-zA-Z0-9-]*\b",
+        normalized_query,
     )
 
-    if extension == ".pdf":
+    exact_terms_lower = {
+        term.lower()
+        for term in exact_terms
+    }
 
-        text = extract_pdf(file_path)
+    keywords = []
 
-    elif extension == ".docx":
+    for word in words:
 
-        text = extract_docx(file_path)
+        word_lower = word.lower()
 
-    elif extension == ".txt":
+        if word_lower in STOPWORDS:
+            continue
 
-        text = extract_txt(file_path)
+        if word_lower in exact_terms_lower:
+            continue
 
-    elif extension == ".csv":
+        if word_lower not in keywords:
+            keywords.append(word_lower)
 
-        text = extract_csv(file_path)
-
-    else:
-
-        raise ValueError(
-            "Unsupported file type. "
-            "Use PDF, DOCX, TXT or CSV."
-        )
-
-    return clean_text(text)
+    return keywords
 
 
-def save_extracted_text(
-    text,
-    original_file
-):
+def extract_query_information(
+    query: str,
+) -> dict[str, list[str]]:
+    """
+    Extract entities, keywords, and exact terms
+    from a user query.
+    """
 
-    os.makedirs(
-        OUTPUT_FOLDER,
-        exist_ok=True
+    exact_terms = extract_exact_terms(query)
+
+    entities = extract_entities(
+        query,
+        exact_terms,
     )
 
-    file_name = os.path.splitext(
-        os.path.basename(original_file)
-    )[0]
-
-    output_file = os.path.join(
-        OUTPUT_FOLDER,
-        file_name + "_extracted.txt"
+    keywords = extract_keywords(
+        query,
+        exact_terms,
     )
 
-    with open(
-        output_file,
-        "w",
-        encoding="utf-8"
-    ) as file:
-
-        file.write(text)
-
-    return output_file
-
-
-def main():
-
-    print("=" * 70)
-    print("        AI KNOWLEDGE BASE EXTRACTOR")
-    print("=" * 70)
-
-    print("\nSupported formats:")
-    print("PDF | DOCX | TXT | CSV")
-
-    print("\nSelect a file...")
-
-    file_path = select_file()
-
-    if not file_path:
-
-        print("\nNo file selected.")
-
-        return
-
-    print("\nSelected file:")
-
-    print(
-        os.path.basename(file_path)
-    )
-
-    print("\n" + "=" * 70)
-    print("EXTRACTING TEXT")
-    print("=" * 70)
-
-    try:
-
-        extracted_text = extract_document(
-            file_path
-        )
-
-        if not extracted_text:
-
-            print(
-                "\nNo text could be extracted."
-            )
-
-            return
-
-        print(
-            "\nExtraction successful!"
-        )
-
-        print(
-            "Characters extracted:",
-            len(extracted_text)
-        )
-
-        print("\nExtracted text:")
-        print("-" * 70)
-
-        print(
-            extracted_text[:5000]
-        )
-
-        print("-" * 70)
-
-        output_file = save_extracted_text(
-            extracted_text,
-            file_path
-        )
-
-        print(
-            "\nExtracted text saved to:"
-        )
-
-        print(
-            os.path.abspath(output_file)
-        )
-
-        print(
-            "\nExtraction completed successfully."
-        )
-
-    except Exception as error:
-
-        print("\nERROR:")
-        print(error)
-
-
-if __name__ == "__main__":
-
-    main()
-
+    return {
+        "entities": entities,
+        "keywords": keywords,
+        "exact_terms": exact_terms,
+    }
